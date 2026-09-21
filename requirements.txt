@@ -1,0 +1,5 @@
+# mediapipe 1.x crashes on macOS arm64 in the hand-landmarker graph
+# ("DrishtiMetalHelper ... Service is unavailable"), so pin to the 0.10 line.
+mediapipe==0.10.35
+numpy<2.2
+opencv-python

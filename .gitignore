@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded automatically on first run by ensure_model()
+models/*.task
+
+# Screenshots saved with the 's' key
+hand_*.png
