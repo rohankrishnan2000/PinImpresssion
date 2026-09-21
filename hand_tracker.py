@@ -19,7 +19,7 @@ from contextlib import ExitStack
 import math
 
 import motor_config as config
-from motion_control import HorizontalMotorMapper, select_control_x
+from motion_control import HorizontalMotorMapper, SpinSpeedMapper, select_control_x
 from motor_serial import UnoMotor, MotorConnectionError
 
 import cv2
@@ -162,8 +162,18 @@ def main():
                     help="motor rotation per centered x pixel")
     ap.add_argument("--speed-factor", type=float, default=config.SPEED_FACTOR,
                     help="multiplier for BASE_SPEED_DEGREES_S in motor_config.py")
-    ap.add_argument("--acceleration", type=float, default=config.ACCELERATION_DEGREES_S2,
-                    help="motor acceleration in degrees per second squared")
+    ap.add_argument("--start-armed", action="store_true",
+                    help="live mode: start following immediately instead of paused")
+    ap.add_argument("--mode", choices=("spin", "position"), default="spin",
+                    help="spin: distance from center sets continuous speed (default); "
+                         "position: hand x sets shaft angle")
+    ap.add_argument("--max-spin", type=float, default=config.MAX_SPIN_DEGREES_S,
+                    help="spin mode: speed in deg/s at full hand distance")
+    ap.add_argument("--deadzone", type=float, default=config.SPIN_DEADZONE_PX,
+                    help="spin mode: pixels around center that give zero speed")
+    ap.add_argument("--acceleration", type=float, default=None,
+                    help="motor acceleration in degrees per second squared "
+                         "(default depends on --mode)")
     ap.add_argument("--microsteps", type=int, choices=(1, 2, 4, 8, 16, 32), default=config.MICROSTEPS,
                     help="must match the physical driver mode pins")
     ap.add_argument("--reverse-motor", action=argparse.BooleanOptionalAction, default=config.REVERSE_MOTOR,
@@ -173,8 +183,13 @@ def main():
     try:
         motor_mapper = HorizontalMotorMapper(args.degrees_per_pixel, args.speed_factor,
                                              args.reverse_motor)
+        spin_mapper = SpinSpeedMapper(args.max_spin, args.deadzone, args.reverse_motor)
     except ValueError as exc:
         ap.error(str(exc))
+    spin = args.mode == "spin"
+    if args.acceleration is None:
+        args.acceleration = (config.SPIN_ACCELERATION_DEGREES_S2 if spin
+                             else config.ACCELERATION_DEGREES_S2)
     if not 0 <= args.smoothing <= 1:
         ap.error("--smoothing must be between 0 and 1")
     if not math.isfinite(args.acceleration) or args.acceleration <= 0:
@@ -213,9 +228,17 @@ def main():
 
         with HandLandmarker.create_from_options(options) as landmarker:
             motor = None
-            armed = False
+            armed = args.start_armed and args.motor_port is not None
             if args.motor_port:
-                motor = UnoMotor(args.motor_port, motor_mapper.max_speed,
+                # Warm up the camera and detector first: a slow first frame would
+                # exceed the Uno's 750 ms command timeout right after connecting.
+                ok, frame = cap.read()
+                if ok:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb),
+                                                int(time.perf_counter() * 1000))
+                motor = UnoMotor(args.motor_port,
+                                 spin_mapper.max_speed if spin else motor_mapper.max_speed,
                                  args.acceleration, args.microsteps)
                 cleanup.callback(motor.close)
                 print("Uno connected; current shaft position is zero. Press m to start/pause.")
@@ -275,7 +298,19 @@ def main():
                 lines = [f"{w}x{h}   {fps:4.1f} fps",
                          "units: " + ("normalized -1..1" if normalized else "pixels from center")]
                 lines += hand_lines or ["no hand detected"]
-                if args.motor_preview or motor is not None:
+                if spin and (args.motor_preview or motor is not None):
+                    control_x = select_control_x(control_positions, args.control_hand)
+                    speed = spin_mapper.speed(control_x, w / 2 * config.SPIN_FULL_SPEED_FRACTION)
+                    if motor is not None:
+                        motor.spin(speed if armed else 0.0)
+                        lines.append("MOTOR LIVE: " + ("FOLLOWING" if armed else "PAUSED") + " [m]")
+                    else:
+                        lines.append(f"MOTOR PREVIEW ONLY ({args.control_hand})")
+                    if control_x is None:
+                        lines.append(f"STOP: {args.control_hand} hand missing/ambiguous")
+                    lines.append(f"spin: {speed:+.0f} deg/s "
+                                 f"({abs(speed) / spin_mapper.max_speed:.0%} of max)")
+                elif args.motor_preview or motor is not None:
                     command = motor_mapper.command(select_control_x(control_positions, args.control_hand))
                     if motor is not None:
                         motor.update(command if armed else motor_mapper.command(None))
@@ -296,7 +331,10 @@ def main():
                 if key == ord("m") and motor is not None:
                     armed = not armed
                     if not armed:
-                        motor.update(motor_mapper.command(None), force=True)
+                        if spin:
+                            motor.spin(0.0, force=True)
+                        else:
+                            motor.update(motor_mapper.command(None), force=True)
                 if key == ord("n"):
                     normalized = not normalized
                 if key == ord("s"):

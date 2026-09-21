@@ -47,6 +47,34 @@ class HorizontalMotorMapper:
         return MotorCommand(target, self.max_speed)
 
 
+class SpinSpeedMapper:
+    """Map centered x pixels to a signed continuous rotation speed.
+
+    Zero inside the deadzone around the center, rising linearly to max_speed
+    at full_speed_px from the center, clamped beyond it. Loss means stop.
+    """
+
+    def __init__(self, max_speed_degrees_s=config.MAX_SPIN_DEGREES_S,
+                 deadzone_px=config.SPIN_DEADZONE_PX, reverse=config.REVERSE_MOTOR):
+        if not math.isfinite(max_speed_degrees_s) or max_speed_degrees_s <= 0:
+            raise ValueError("max spin speed must be finite and greater than zero")
+        if not math.isfinite(deadzone_px) or deadzone_px < 0:
+            raise ValueError("deadzone must be finite and not negative")
+        self.max_speed = max_speed_degrees_s
+        self.deadzone = deadzone_px
+        self.direction = -1 if reverse else 1
+
+    def speed(self, centered_x, full_speed_px):
+        if centered_x is None or not math.isfinite(centered_x):
+            return 0.0
+        distance = abs(centered_x) - self.deadzone
+        span = full_speed_px - self.deadzone
+        if distance <= 0 or span <= 0:
+            return 0.0
+        fraction = min(1.0, distance / span)
+        return math.copysign(fraction * self.max_speed, centered_x) * self.direction
+
+
 def select_control_x(hands, control_hand="right"):
     """Use only the selected handedness; ambiguity or loss means hold.
 

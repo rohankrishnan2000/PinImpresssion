@@ -67,8 +67,8 @@ Do not use the supply's 1.5 A rating as the motor's current-limit setting.
 
 | SD8825 label | Connection for this sketch |
 | --- | --- |
-| STEP | Uno D2 |
-| DIR | Uno D3 |
+| STEP | Uno D3 |
+| DIR | Uno D2 |
 | EN | Uno D4; also use a 10 kΩ pull-up to Uno 5 V to keep it disabled during reset |
 | RST, SLP | Uno 5 V |
 | VDD | Uno 5 V (logic supply) |

@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from motion_control import HorizontalMotorMapper, select_control_x
+from motion_control import HorizontalMotorMapper, SpinSpeedMapper, select_control_x
 
 
 class MotionControlTests(unittest.TestCase):
@@ -41,6 +41,15 @@ class MotionControlTests(unittest.TestCase):
             for value in (0, -1, math.nan, math.inf):
                 with self.subTest(option=option, value=value), self.assertRaises(ValueError):
                     HorizontalMotorMapper(**{option: value})
+
+    def test_spin_speed_grows_with_distance_and_is_zero_at_center(self):
+        mapper = SpinSpeedMapper(max_speed_degrees_s=600, deadzone_px=40)
+        for x, expected in [(0, 0), (-40, 0), (240, 300), (440, 600), (1000, 600),
+                            (-240, -300), (None, 0), (math.nan, 0)]:
+            self.assertAlmostEqual(mapper.speed(x, full_speed_px=440), expected)
+
+    def test_spin_reverse(self):
+        self.assertAlmostEqual(SpinSpeedMapper(600, 0, reverse=True).speed(100, 200), -300)
 
 
 if __name__ == "__main__":

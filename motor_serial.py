@@ -18,7 +18,7 @@ class UnoMotor:
     # Match the protocol limits in the Arduino sketch. These are numeric bounds,
     # NOT mechanical travel limits or verified limits of a particular motor.
     MAX_TARGET_STEPS = 1_000_000
-    MAX_SPEED_STEPS_S = 2000
+    MAX_SPEED_STEPS_S = 4000
     MAX_ACCEL_STEPS_S2 = 5000
 
     def __init__(self, port, max_speed_degrees_s,
@@ -102,6 +102,19 @@ class UnoMotor:
                 raise MotorConnectionError("Motor target exceeds the numeric protocol range")
             self._exchange(f"TARGET {round(target)}", "OK TARGET")
         self.holding = holding
+        self.last_sent = now
+
+    def spin(self, speed_degrees_s, now=None, force=False):
+        """Continuous rotation at a signed speed; 0 ramps down and holds."""
+        if self.closed:
+            raise MotorConnectionError("Motor connection is closed")
+        now = time.monotonic() if now is None else now
+        if not force and now - self.last_sent < self.interval:
+            return
+        steps = speed_degrees_s * self.steps_per_degree if math.isfinite(speed_degrees_s) else 0
+        steps = max(-self.speed, min(self.speed, round(steps)))
+        self._exchange(f"SPEED {steps}", "OK SPEED")
+        self.holding = None
         self.last_sent = now
 
     def close(self):
