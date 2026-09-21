@@ -8,12 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-const uint8_t STEP_PIN = 2;
-const uint8_t DIR_PIN = 3;
+const uint8_t STEP_PIN = 3;
+const uint8_t DIR_PIN = 2;
 const uint8_t ENABLE_PIN = 4;  // SD8825 EN is active LOW
 const unsigned long COMMAND_TIMEOUT_MS = 750;
 const long MAX_TARGET_STEPS = 1000000L;  // Numeric bound, not a travel limit
-const long MAX_SPEED_STEPS_S = 2000;
+const long MAX_SPEED_STEPS_S = 4000;
 const long MAX_ACCEL_STEPS_S2 = 5000;
 
 // enable=false prevents pin setup/energizing before setup() sets EN HIGH.
@@ -25,7 +25,47 @@ bool configured = false;
 bool sessionStarted = false;
 unsigned long lastCommandMs = 0;
 
+// Continuous-rotation (SPEED) mode: the speed ramps toward the requested
+// value at the configured acceleration instead of jumping.
+const unsigned long RAMP_INTERVAL_US = 2000;
+bool spinMode = false;
+float spinTarget = 0;   // steps/s, signed
+float spinCurrent = 0;  // steps/s, signed
+float spinAccel = 1;    // steps/s^2
+unsigned long lastRampUs = 0;
+
+void leaveSpinMode() {
+  spinMode = false;
+  spinTarget = 0;
+  spinCurrent = 0;
+  motor.setSpeed(0);
+}
+
+void rampSpin() {
+  unsigned long now = micros();
+  unsigned long dt = now - lastRampUs;
+  if (dt < RAMP_INTERVAL_US) return;
+  lastRampUs = now;
+  float dv = spinAccel * dt * 1e-6;
+  if (spinCurrent < spinTarget) {
+    spinCurrent = min(spinCurrent + dv, spinTarget);
+  } else {
+    spinCurrent = max(spinCurrent - dv, spinTarget);
+  }
+  motor.setSpeed(spinCurrent);
+}
+
+void stepMotor() {
+  if (spinMode) {
+    rampSpin();
+    motor.runSpeed();
+  } else {
+    motor.run();
+  }
+}
+
 void holdHere() {
+  leaveSpinMode();
   // Cancels queued movement and resets speed to zero, retaining holding torque.
   // An abrupt pulse stop can lose mechanical position under load.
   motor.setCurrentPosition(motor.currentPosition());
@@ -90,6 +130,7 @@ void handleLine(char *line) {
     holdHere();
     motor.setMaxSpeed(speed);
     motor.setAcceleration(acceleration);
+    spinAccel = acceleration;
     configured = true;
     lastCommandMs = millis();
     Serial.println(F("OK CONFIG"));
@@ -111,10 +152,29 @@ void handleLine(char *line) {
       rejectCommand(F("ERR TARGET"));
       return;
     }
+    if (spinMode) holdHere();
     motor.enableOutputs();
     motor.moveTo(target);
     lastCommandMs = millis();
     Serial.println(F("OK TARGET"));
+    return;
+  }
+  if (strcmp(cmd, "SPEED") == 0 && second == NULL) {
+    long speed;
+    if (!parseLong(first, speed) || speed < -(long)motor.maxSpeed() || speed > (long)motor.maxSpeed()) {
+      rejectCommand(F("ERR SPEED"));
+      return;
+    }
+    motor.enableOutputs();
+    if (!spinMode) {
+      // Start from rest at the current position; ramp from zero.
+      holdHere();
+      spinMode = true;
+      lastRampUs = micros();
+    }
+    spinTarget = speed;
+    lastCommandMs = millis();
+    Serial.println(F("OK SPEED"));
     return;
   }
   rejectCommand(F("ERR COMMAND"));
@@ -158,7 +218,7 @@ void loop() {
         lineBuffer[lineLength++] = c;
       }
     }
-    motor.run();
+    stepMotor();
   }
-  motor.run();
+  stepMotor();
 }

@@ -53,7 +53,7 @@ class SerialTests(unittest.TestCase):
         self.assertEqual(serial.writes[1:], [b"CONFIG 50 100\n", b"TARGET 10\n"])
 
     def test_rate_limit_sends_latest_target_and_refreshes_stationary_target(self):
-        motor, serial = self.make_motor()
+        motor, serial = self.make_motor(microsteps=8)
         motor.update(MotorCommand(18, 90), now=0)
         motor.update(MotorCommand(36, 90), now=0.01)
         motor.update(MotorCommand(54, 90), now=0.1)
@@ -113,6 +113,16 @@ class SerialTests(unittest.TestCase):
             args = {"max_speed_degrees_s": 90, **kwargs}
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 UnoMotor("TEST", serial_factory=fail_open, boot_wait=0, **args)
+
+    def test_spin_sends_signed_clamped_speed_at_command_rate(self):
+        motor, serial = self.make_motor(microsteps=8)  # 90 deg/s cap -> 400 steps/s
+        motor.spin(45, now=0)
+        motor.spin(-45, now=0.01)  # rate limited
+        motor.spin(-45, now=0.1)
+        motor.spin(1000, now=0.2)
+        motor.spin(0, now=0.21, force=True)
+        self.assertEqual(serial.writes[2:], [b"SPEED 200\n", b"SPEED -200\n",
+                                             b"SPEED 400\n", b"SPEED 0\n"])
 
 
 if __name__ == "__main__":
