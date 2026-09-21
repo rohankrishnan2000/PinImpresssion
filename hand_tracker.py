@@ -7,7 +7,7 @@ Axes follow the math convention, not the image convention:
 The camera feed is mirrored (selfie view), so moving your real hand to the
 right moves the reported point in the +x direction.
 
-Keys:  q / ESC quit   ·   s save a screenshot   ·   n toggle normalized units
+Keys: q / ESC quit · s screenshot · n units · m start/pause motor (live mode)
 """
 
 import argparse
@@ -15,6 +15,12 @@ import os
 import time
 import urllib.request
 from collections import deque
+from contextlib import ExitStack
+import math
+
+import motor_config as config
+from motion_control import HorizontalMotorMapper, select_control_x
+from motor_serial import UnoMotor, MotorConnectionError
 
 import cv2
 import mediapipe as mp
@@ -122,7 +128,7 @@ def draw_marker(frame, px, py, label, text, color):
 def panel(frame, lines):
     """Translucent info panel in the top-left corner."""
     pad, lh = 10, 22
-    w = 250
+    w = min(frame.shape[1], 430)
     h = pad * 2 + lh * len(lines)
     overlay = frame[0:h, 0:w].copy()
     cv2.rectangle(overlay, (0, 0), (w, h), (20, 20, 20), -1)
@@ -145,99 +151,165 @@ def main():
     ap.add_argument("--no-mirror", action="store_true", help="don't mirror the camera")
     ap.add_argument("--smoothing", type=float, default=0.4,
                     help="0 = frozen, 1 = no smoothing (default 0.4)")
+    motor_mode = ap.add_mutually_exclusive_group()
+    motor_mode.add_argument("--motor-preview", action="store_true",
+                    help="display horizontal motor targets; does not connect to hardware")
+    motor_mode.add_argument("--motor-port", metavar="PORT",
+                    help="Uno serial port; press m in the camera window to start movement")
+    ap.add_argument("--control-hand", choices=("left", "right"), default=config.CONTROL_HAND,
+                    help="hand that controls the motor (default from motor_config.py)")
+    ap.add_argument("--degrees-per-pixel", type=float, default=config.DEGREES_PER_PIXEL,
+                    help="motor rotation per centered x pixel")
+    ap.add_argument("--speed-factor", type=float, default=config.SPEED_FACTOR,
+                    help="multiplier for BASE_SPEED_DEGREES_S in motor_config.py")
+    ap.add_argument("--acceleration", type=float, default=config.ACCELERATION_DEGREES_S2,
+                    help="motor acceleration in degrees per second squared")
+    ap.add_argument("--microsteps", type=int, choices=(1, 2, 4, 8, 16, 32), default=config.MICROSTEPS,
+                    help="must match the physical driver mode pins")
+    ap.add_argument("--reverse-motor", action=argparse.BooleanOptionalAction, default=config.REVERSE_MOTOR,
+                    help="reverse the motor target direction")
     args = ap.parse_args()
+
+    try:
+        motor_mapper = HorizontalMotorMapper(args.degrees_per_pixel, args.speed_factor,
+                                             args.reverse_motor)
+    except ValueError as exc:
+        ap.error(str(exc))
+    if not 0 <= args.smoothing <= 1:
+        ap.error("--smoothing must be between 0 and 1")
+    if not math.isfinite(args.acceleration) or args.acceleration <= 0:
+        ap.error("--acceleration must be finite and greater than zero")
+    if args.control_hand not in ("left", "right"):
+        ap.error("CONTROL_HAND must be left or right")
 
     ensure_model(args.model)
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        raise SystemExit(
-            f"Could not open camera {args.camera}. On macOS, grant your terminal "
-            "camera access in System Settings > Privacy & Security > Camera."
+    with ExitStack() as cleanup:
+        cap = cv2.VideoCapture(args.camera)
+        cleanup.callback(cap.release)
+        cleanup.callback(cv2.destroyAllWindows)
+        if not cap.isOpened():
+            raise SystemExit(
+                f"Could not open camera {args.camera}. On macOS, grant your terminal "
+                "camera access in System Settings > Privacy & Security > Camera."
+            )
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+
+        options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=args.model),
+            running_mode=RunningMode.VIDEO,
+            num_hands=args.hands,
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
         )
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
 
-    options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=args.model),
-        running_mode=RunningMode.VIDEO,
-        num_hands=args.hands,
-        min_hand_detection_confidence=0.5,
-        min_hand_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
+        smoothers = {}
+        fps_times = deque(maxlen=30)
+        normalized = args.normalized
+        window = "Hand Tracker  -  origin at center"
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
-    smoothers = {}
-    fps_times = deque(maxlen=30)
-    normalized = args.normalized
-    window = "Hand Tracker  -  origin at center"
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        with HandLandmarker.create_from_options(options) as landmarker:
+            motor = None
+            armed = False
+            if args.motor_port:
+                motor = UnoMotor(args.motor_port, motor_mapper.max_speed,
+                                 args.acceleration, args.microsteps)
+                cleanup.callback(motor.close)
+                print("Uno connected; current shaft position is zero. Press m to start/pause.")
+                print(f"Recorded supply: {config.POWER_SUPPLY_VOLTAGE_V} V, "
+                      f"{config.POWER_SUPPLY_MAX_CURRENT_A} A capacity; "
+                      f"confirmed={config.POWER_SUPPLY_CONFIRMED}. These are reference values only.")
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if not args.no_mirror:
+                    frame = cv2.flip(frame, 1)
 
-    with HandLandmarker.create_from_options(options) as landmarker:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if not args.no_mirror:
-                frame = cv2.flip(frame, 1)
+                h, w = frame.shape[:2]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = landmarker.detect_for_video(mp_image, int(time.perf_counter() * 1000))
 
-            h, w = frame.shape[:2]
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = landmarker.detect_for_video(mp_image, int(time.perf_counter() * 1000))
+                draw_axes(frame, w, h)
 
-            draw_axes(frame, w, h)
+                hand_lines = []
+                control_positions = []
+                seen = set()
+                labels = [result.handedness[i][0].category_name if result.handedness else f"Hand {i}"
+                          for i in range(len(result.hand_landmarks))]
+                for i, landmarks in enumerate(result.hand_landmarks):
+                    # `handedness` is reported for the real hand; mirroring the image
+                    # flips which side of the frame it appears on, not which hand it is.
+                    label = labels[i]
+                    # Keep smoothing attached to the same hand if detection order changes.
+                    key = label if labels.count(label) == 1 else f"{label}{i}"
+                    seen.add(key)
 
-            hand_lines = []
-            seen = set()
-            for i, landmarks in enumerate(result.hand_landmarks):
-                # `handedness` is reported for the real hand; mirroring the image
-                # flips which side of the frame it appears on, not which hand it is.
-                label = result.handedness[i][0].category_name if result.handedness else f"Hand {i}"
-                key = f"{label}{i}"
-                seen.add(key)
+                    draw_skeleton(frame, landmarks, w, h)
 
-                draw_skeleton(frame, landmarks, w, h)
+                    palm = np.mean([[landmarks[j].x, landmarks[j].y] for j in PALM_LANDMARKS], axis=0)
+                    smoother = smoothers.setdefault(key, Smoother(args.smoothing))
+                    sx, sy = smoother((palm[0] * w, palm[1] * h))
 
-                palm = np.mean([[landmarks[j].x, landmarks[j].y] for j in PALM_LANDMARKS], axis=0)
-                smoother = smoothers.setdefault(key, Smoother(args.smoothing))
-                sx, sy = smoother((palm[0] * w, palm[1] * h))
+                    x, y = to_centered(sx, sy, w, h)
+                    control_positions.append((label, float(x)))
+                    if normalized:
+                        text = f"({x / (w / 2):+.3f}, {y / (h / 2):+.3f})"
+                    else:
+                        text = f"({x:+.0f}, {y:+.0f})"
 
-                x, y = to_centered(sx, sy, w, h)
-                if normalized:
-                    text = f"({x / (w / 2):+.3f}, {y / (h / 2):+.3f})"
-                else:
-                    text = f"({x:+.0f}, {y:+.0f})"
+                    color = COLOR_LEFT if label.lower().startswith("l") else COLOR_RIGHT
+                    draw_marker(frame, sx, sy, label, text, color)
+                    hand_lines.append(f"{label:<5} {text}")
 
-                color = COLOR_LEFT if label.lower().startswith("l") else COLOR_RIGHT
-                draw_marker(frame, sx, sy, label, text, color)
-                hand_lines.append(f"{label:<5} {text}")
+                for stale in set(smoothers) - seen:
+                    del smoothers[stale]
 
-            for stale in set(smoothers) - seen:
-                del smoothers[stale]
+                fps_times.append(time.perf_counter())
+                fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0]) if len(fps_times) > 1 else 0.0
 
-            fps_times.append(time.perf_counter())
-            fps = (len(fps_times) - 1) / (fps_times[-1] - fps_times[0]) if len(fps_times) > 1 else 0.0
+                lines = [f"{w}x{h}   {fps:4.1f} fps",
+                         "units: " + ("normalized -1..1" if normalized else "pixels from center")]
+                lines += hand_lines or ["no hand detected"]
+                if args.motor_preview or motor is not None:
+                    command = motor_mapper.command(select_control_x(control_positions, args.control_hand))
+                    if motor is not None:
+                        motor.update(command if armed else motor_mapper.command(None))
+                        lines.append("MOTOR LIVE: " + ("FOLLOWING" if armed else "PAUSED") + " [m]")
+                    else:
+                        lines.append(f"MOTOR PREVIEW ONLY ({args.control_hand})")
+                    if command.target_degrees is None:
+                        lines.append("HOLD: selected hand missing/ambiguous")
+                    else:
+                        lines.append(f"target: {command.target_degrees:+.1f} deg")
+                    lines.append(f"speed limit: {command.max_speed_degrees_s:.1f} deg/s")
+                panel(frame, lines)
 
-            lines = [f"{w}x{h}   {fps:4.1f} fps",
-                     "units: " + ("normalized -1..1" if normalized else "pixels from center")]
-            lines += hand_lines or ["no hand detected"]
-            panel(frame, lines)
+                cv2.imshow(window, frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+                if key == ord("m") and motor is not None:
+                    armed = not armed
+                    if not armed:
+                        motor.update(motor_mapper.command(None), force=True)
+                if key == ord("n"):
+                    normalized = not normalized
+                if key == ord("s"):
+                    name = time.strftime("hand_%Y%m%d_%H%M%S.png")
+                    cv2.imwrite(name, frame)
+                    print(f"saved {name}")
 
-            cv2.imshow(window, frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
-            if key == ord("n"):
-                normalized = not normalized
-            if key == ord("s"):
-                name = time.strftime("hand_%Y%m%d_%H%M%S.png")
-                cv2.imwrite(name, frame)
-                print(f"saved {name}")
-
-    cap.release()
-    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (MotorConnectionError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    except KeyboardInterrupt:
+        pass
