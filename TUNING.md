@@ -1,7 +1,43 @@
-# Tuning the boundary / keyboard draft
+# Tuning hand position and keyboard control
 
 Applies to `TL/PinImpresssion/`. Edit these files in the repo, then restart Python.
 Command-line options override defaults for that run.
+
+## Setup window and saved preferences
+
+Run `python launcher.py` from the project folder using the same Python environment
+as the tracker. **Setup** selects mode, output, port, camera, hand and boundary;
+**Tuning** contains horizontal-axis settings, camera resolution and smoothing.
+The form uses the same validation and units as the terminal options below.
+
+**Open session** applies the current form values and opens the tracker paused.
+Use **Start motion / Pause** in the control window (or M). Existing A/D, B, F and
+Q/Esc controls remain. **End session** returns to setup. Setup fields are locked
+during a session; end it before changing them. Opening another motor session
+re-establishes startup zero, just as opening the port from a terminal does.
+
+Click **Save settings** to remember your choices in `launcher_settings.json`
+beside the scripts. It stores only overrides of the code defaults and never edits
+`motor_config.py`. Unsaved form changes affect only that launch. Saved overrides
+win over later changes to those same defaults in the GUI. **Use defaults**, then
+**Save settings**, clears the overrides so code defaults apply again. Unchanged
+settings inherit new code defaults when the launcher restarts. Direct terminal
+launches ignore this preferences file entirely. Bad settings files show an error
+and load defaults without overwriting the bad file automatically.
+
+**Use the full camera frame** starts checked in the GUI. It passes `--full-frame`
+to the tracker, ignoring any saved rectangle without changing/deleting its file.
+Uncheck it to load the saved/default rectangle. Drawing a rectangle with B changes
+the active session and saves it; a later full-frame launch still ignores it.
+You can also add `--full-frame` to any existing terminal launch command. The
+original terminal default is unchanged. The manual code-edit method below
+remains available if you want to change that default too.
+
+The Camera field is a device index: usually 0, with other available devices at
+other indexes. It can be typed manually; setup does not probe/open all cameras.
+Port Refresh lists serial devices without connecting. Manual mode never uses a
+camera. Local preferences/calibration are excluded from Git and should be checked
+when moving to another computer. Only X is implemented; W/S remain reserved.
 
 ## What to tune first
 
@@ -13,6 +49,64 @@ Command-line options override defaults for that run.
 3. **Direction:** change `REVERSE_MOTOR` if increasing hand x moves the wrong way.
 4. **Speed:** use `SPEED_FACTOR` to change how fast it approaches the target.
 5. **Optional smoothing:** F toggles it; it is initially off.
+
+## Use the whole camera frame as the boundary
+
+In `tracking_control.py`, change the four defaults in `Boundary` to:
+
+```python
+@dataclass(frozen=True)
+class Boundary:
+    left: float = 0.0
+    top: float = 0.0
+    right: float = 1.0
+    bottom: float = 1.0
+```
+
+Leave the rest of the class unchanged. Coordinates are fractions of the camera
+image: 0 is the left/top edge, 1 is the right/bottom edge. This uses the entire
+camera image, excluding the controls panel and any black margins around it.
+The previous 0.15–0.85 defaults admitted only the middle 70% in each direction.
+The motor angle limits stay the same; they now span the whole image.
+
+**A saved rectangle overrides these defaults.** On the computer running the
+tracker, close the program and look for `tracking_boundary.json` beside
+`hand_tracker.py`. If it exists, rename it to `tracking_boundary_backup.json`
+(or another unused backup name), then restart. If using `--boundary-file`,
+rename the file selected by that option instead. If there is no saved file,
+editing the defaults and restarting is enough. Pressing B and saving another
+rectangle creates an override again. Saved boundary files are local and ignored
+by Git, so check the actual testing computer even after pulling updated code.
+
+The detector already examines the entire camera image. The rectangle is applied
+after detection to decide whether to send a motor target; it does not crop the
+image supplied to the detector. If the hand skeleton appears promptly but the
+motor waits, read the HOLD/PAUSED status. If the skeleton itself appears late,
+that is a detection/display issue and enlarging this rectangle will not fix it.
+
+## What HOLD, selected hand, and F mean
+
+**HOLD** cancels the previous move and stops step pulses at the current commanded
+position. It does not return the motor to zero. It retains holding torque after
+motion has begun; actual shaft position is not measured. Position mode holds
+when the selected palm is outside the boundary, missing or ambiguous, or when
+motor control is paused. Following resumes on a valid hand inside the boundary
+if still armed. After M-pause, focus loss, or boundary editing, press M to resume.
+
+**Selected hand** means the hand label used to control the motor. The default is
+`CONTROL_HAND = "right"` in `motor_config.py`. A detected hand labelled Left can
+appear on screen without controlling the motor. Right/Left refers to the
+reported hand label, not which side of the image it occupies. Check the label
+beside your hand. To use Left, set `CONTROL_HAND = "left"` and restart, or add
+`--control-hand left` to your launch command. If two detections share the selected
+label, the program holds rather than choosing between them.
+
+**F toggles optional smoothing** in position mode; it is not a key to hold down.
+Look at `F: smoothing OFF/ON` in the window. OFF uses the detected palm coordinate
+directly. ON filters that coordinate to reduce jitter, which can add response
+lag. It does not change the hand detector's recognition thresholds. Smoothing
+starts off with `SMOOTHING_ENABLED = False`; `--no-smooth` also forces it off at
+startup. Keep it off while diagnosing latency, then compare by pressing F once.
 
 ## Position mode — motor_config.py
 

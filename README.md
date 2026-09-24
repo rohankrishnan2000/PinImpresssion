@@ -1,4 +1,4 @@
-# Pin Impression — boundary and keyboard draft
+# Pin Impression — hand position and keyboard control
 
 This project lives in `TL/PinImpresssion/`. This version makes **hand position following the default** and
 moves continuous rotation into a camera-free keyboard mode.
@@ -7,7 +7,46 @@ The working hardware configuration is preserved: **STEP D3, DIR D2, EN D4,
 MICROSTEPS = 1**. The Uno sketch and serial transport are copied unchanged from
 the working repository. An Uno already running that sketch needs no new upload.
 
-## Start here
+## Start with the setup window
+
+From your existing Python environment:
+
+```bash
+cd /Users/yangq/Desktop/TL/PinImpresssion
+python launcher.py
+```
+
+1. Choose **position** (hand tracking) or **manual** (A/D keyboard).
+2. Choose **preview** to test without a motor, or **motor** and select the
+   Arduino port. Refresh lists available ports; you can also type a port name.
+3. Choose the camera index and Right/Left hand label. Full camera frame is
+   checked by default; uncheck it to use the saved/default rectangle.
+4. Use the **Tuning** tab for horizontal travel, speed, direction, microsteps,
+   resolution and optional smoothing. Keep microsteps matched to the driver.
+5. **Save settings** remembers choices for future GUI launches. Opening a session
+   applies current values but does not automatically save them.
+6. Click **Open session**. The control window opens paused. Click **Start motion**
+   there (or M); click **Pause** to hold. Keyboard mode still uses held A/D.
+7. **End session** closes the control window and returns you to setup. Changes to
+   setup are applied by opening a new session; reconnecting defines startup zero
+   again, so establish the mechanism's center before a live session.
+
+Both windows show session state. Connection/detector errors appear in the setup
+window's details box. Clicking away from the control window still pauses motion;
+click Start motion when ready to resume. Opening setup alone does not connect to
+hardware or request camera access.
+
+The launcher uses Python's Tk interface and the existing project requirements;
+there is no new pip dependency. If your Python lacks Tk, install Tk support for
+that Python distribution or continue with the terminal commands below. Use the
+same Python environment that successfully ran the tracker. This is a Python
+setup application, not a packaged standalone executable.
+
+See [TUNING.md](TUNING.md) for saved-settings precedence and
+[ARCHITECTURE.md](ARCHITECTURE.md) for how the UI stays separate from motor control
+and how a second axis can be added later.
+
+## Terminal setup and preview
 
 Use your existing Python environment with the project dependencies, or create a
 new environment with Python 3.13. The pinned dependencies were tested on 3.13.
@@ -34,7 +73,7 @@ nor the camera. Grant camera access to the application running Python if asked.
 4. Leave **F** off initially. Toggle it on only if you want smoothing.
 5. Check the motor range in `motor_config.py` before connecting the mechanism.
 
-The rectangle is saved beside the script as `tracking_boundary.json`, using
+When drawing with B, the rectangle is saved beside the script as `tracking_boundary.json`, using
 normalized image coordinates. It survives resolution changes. Redraw it after
 moving the camera or changing framing. A changed mirror setting rejects the
 saved calibration and displays the default rectangle with a notice.
@@ -83,7 +122,10 @@ shaft, or supervise the belt travel directly until physical limits are added.
 Start at the 90°/s default; change `MANUAL_SPEED_DEGREES_S` or `--manual-speed` to
 adjust it. `--reverse-motor` reverses either mode.
 
-## Keys
+## Keys and on-screen buttons
+
+The control window has clickable Start/Pause, Draw boundary, Smoothing, and
+End session buttons. Keyboard shortcuts remain available.
 
 | Key | Action |
 | --- | --- |
@@ -97,14 +139,17 @@ adjust it. `--reverse-motor` reverses either mode.
 
 Position and manual modes are selected at launch. A/D do not override the hand
 in position mode. `--mode spin`, `--degrees-per-pixel`, `--deadzone`, `--max-spin`,
-`--normalized`, and the old `--smoothing` option are not used by this draft.
+`--normalized`, and the old `--smoothing` option are not used by this version.
 See [TUNING.md](TUNING.md) for the replacement settings.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `hand_tracker.py` | Camera tracking, keyboard-only mode, window and keys |
+| `launcher.py` | Setup window, saved choices, session status |
+| `launcher_settings.py` | Preferences and conversion to existing terminal options |
+| `launcher_process.py`, `session_control.py` | Session startup, status and clean shutdown |
+| `hand_tracker.py` | Camera tracking, keyboard-only mode, window and buttons/keys |
 | `tracking_control.py` | Saved boundary, position mapping, held-key state |
 | `tracking_filter.py` | Optional time-based adaptive smoothing |
 | `motor_config.py` | Tunable defaults and hardware reference values |
@@ -120,7 +165,7 @@ Keep the existing SD8825 wiring and physical full-step mode. The motor label
 says 1.8° and 1.0 A per phase; the supply is recorded as an unconfirmed 12 V,
 1.5 A supply. Editing those reference entries cannot alter voltage or current.
 Do not substitute the supply's current rating for the motor's phase-current
-setting. This draft does not change driver wiring/current adjustment.
+setting. This version does not change driver wiring/current adjustment.
 
 Position commands are rounded to full steps (1.8° per pulse). Smoothing cannot
 make the physical driver take smaller steps. Change microstepping only by
@@ -138,7 +183,7 @@ holding torque. After a timeout, restart and establish zero again.
 python -m unittest discover -v
 ```
 
-46 tests passed, including actual window-event handling with a virtual display,
-key release, focus loss, rectangle saving, smoothing toggle, and camera-error
-cleanup. The display was inspected using a synthetic frame. This does not
-replace a real-camera and motor test on the board.
+The tests cover mapping, serial behavior, window events, preferences, and a real
+camera-free child session opened and closed through the launcher. Native Tk
+layout inspection through desktop automation was unavailable. Camera/motor
+operation and Windows/Linux GUI behavior still need testing on those systems.

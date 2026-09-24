@@ -11,3 +11,7 @@ hand_*.png
 # Local camera calibration (redraw if the camera moves)
 tracking_boundary.json
 tracking_boundary.json.tmp
+
+# Local setup-window preferences
+launcher_settings.json
+launcher_settings.json.tmp

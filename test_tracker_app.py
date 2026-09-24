@@ -114,6 +114,38 @@ class AppTests(unittest.TestCase):
                 app.run(args)
         self.assertTrue(motor.closed)
 
+    def test_click_start_and_end_buttons_use_existing_controls(self):
+        commands = self.run_frames([
+            [],  # Draw controls.
+            [pg.event.Event(pg.MOUSEBUTTONDOWN, button=1, pos=(80, 690))],
+            [pg.event.Event(pg.KEYDOWN, key=pg.K_d, repeat=False)],
+            [pg.event.Event(pg.MOUSEBUTTONDOWN, button=1, pos=(260, 690))],
+        ])
+        self.assertEqual([c for c in commands if c[0] == 'speed'], [('speed', 90)])
+
+    def test_full_frame_ignores_saved_rectangle_without_overwriting_it(self):
+        import numpy as np
+        import tempfile
+        from pathlib import Path
+        motor = FakeMotor()
+        class FakeCamera:
+            def __init__(self, *args):
+                pass
+            def read(self):
+                return np.zeros((360, 640, 3), dtype=np.uint8), [('Right', (.05, .5))]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'boundary.json'
+            app.Boundary(.2, .2, .8, .8).save(path, True)
+            original = path.read_bytes()
+            args = app.arguments(['--motor-port', 'TEST', '--start-armed', '--full-frame',
+                                  '--boundary-file', str(path)])
+            with patch.object(app, 'UnoMotor', return_value=motor), \
+                 patch.object(app, 'Camera', FakeCamera), \
+                 patch.object(pg.event, 'get', side_effect=[[], [pg.event.Event(pg.QUIT)]]):
+                app.run(args)
+            self.assertAlmostEqual(motor.commands[0][1], -81)
+            self.assertEqual(path.read_bytes(), original)
+
     def test_position_default_and_optional_smoothing(self):
         args = app.arguments([])
         self.assertEqual(args.mode, 'position')

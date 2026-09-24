@@ -31,6 +31,9 @@ def arguments(argv=None):
     motor.add_argument("--motor-port", help="Uno USB port; starts paused unless --start-armed")
     motor.add_argument("--motor-preview", action="store_true", help="preview only (also the default)")
     ap.add_argument("--start-armed", action="store_true")
+    ap.add_argument("--full-frame", action="store_true",
+                    help="use the entire camera image instead of a saved/default rectangle")
+    ap.add_argument("--launcher-control", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -145,8 +148,16 @@ class View:
         self.font = pg.font.Font(None, 24)
         self.title = pg.font.Font(None, 32)
         self.rect = (0, 0, 1, 1)
+        self.buttons = {}
 
-    def draw(self, frame, boundary, raw, filtered, drag, lines, manual=False):
+    def button_key(self, position):
+        for key, rect in self.buttons.items():
+            if rect.collidepoint(position):
+                return key
+        return None
+
+    def draw(self, frame, boundary, raw, filtered, drag, lines, manual=False,
+             armed=False, smooth=False, editing=False):
         pg = self.pg
         self.screen.fill((17, 22, 30))
         ww, wh = self.screen.get_size()
@@ -202,18 +213,33 @@ class View:
                 else:
                     row = candidate
             y += 8
+        self.buttons = {}
+        actions = [(pg.K_m, "Pause" if armed else "Start motion")]
+        if not manual:
+            actions += [(pg.K_b, "Cancel boundary" if editing else "Draw boundary"),
+                        (pg.K_f, "Smoothing: ON" if smooth else "Smoothing: OFF")]
+        actions.append((pg.K_q, "End session"))
+        button_width = max(1, min(185, (ww - 32 - 10 * (len(actions) - 1)) // len(actions)))
+        for index, (key, label) in enumerate(actions):
+            rect = pg.Rect(16 + index * (button_width + 10), wh - 44, button_width, 32)
+            self.buttons[key] = rect
+            pg.draw.rect(self.screen, (42, 66, 83), rect, border_radius=6)
+            text = self.font.render(label, True, (240, 247, 255))
+            self.screen.blit(text, text.get_rect(center=rect.center))
         pg.display.flip()
 
 
-def run(args):
+def run(args, control=None):
     import pygame as pg
     with ExitStack() as cleanup:
         cleanup.callback(pg.quit)
         view = View(pg)
         manual = args.mode == "manual"
-        boundary = Boundary()
+        boundary = Boundary(0, 0, 1, 1) if args.full_frame else Boundary()
         note = "Press M, then hold A or D" if manual else "B: draw and save your boundary"
-        if not manual and args.boundary_file.exists():
+        if args.full_frame and not manual:
+            note = "Full camera frame; saved rectangle ignored"
+        if not manual and not args.full_frame and args.boundary_file.exists():
             try:
                 boundary = Boundary.load(args.boundary_file, not args.no_mirror)
                 note = "Saved boundary loaded"
@@ -222,7 +248,11 @@ def run(args):
                 print(note)
         mapper = BoundedPositionMapper(boundary, args.position_min, args.position_max,
                                        args.speed, args.reverse_motor)
+        if control and control.quit_requested():
+            return
         camera = None if manual else Camera(args, cleanup)
+        if control and control.quit_requested():
+            return
         motor = None
         if args.motor_port:
             motor = UnoMotor(args.motor_port, args.speed, args.acceleration, args.microsteps)
@@ -236,6 +266,13 @@ def run(args):
         running, frame = True, None
         hold = MotorCommand(None, args.speed)
 
+        def report_state():
+            if control:
+                control.report("active" if armed else "paused", motor=motor is not None,
+                               mode=args.mode)
+
+        report_state()
+
         def pause():
             nonlocal armed
             armed = False
@@ -243,9 +280,16 @@ def run(args):
             smoothing(None, time.monotonic())
             if motor:
                 motor.update(hold, force=True)
+            report_state()
 
         while running:
+            if control and control.quit_requested():
+                break
             for event in pg.event.get():
+                if event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+                    action = view.button_key(event.pos)
+                    if action is not None:
+                        event = pg.event.Event(pg.KEYDOWN, key=action, repeat=False)
                 if event.type == pg.QUIT:
                     running = False
                     break
@@ -265,6 +309,7 @@ def run(args):
                         else:
                             keys.clear()  # Require a fresh A/D press after arming.
                             armed = True
+                            report_state()
                     elif event.key == pg.K_f and not manual:
                         smooth = not smooth
                         smoothing(None, time.monotonic())
@@ -341,12 +386,18 @@ def run(args):
             if editing:
                 lines.append("DRAW BOUNDARY - MOTOR PAUSED")
             view.draw(frame, boundary, raw, filtered,
-                      (drag_start, drag_end) if drag_start else None, lines, manual)
+                      (drag_start, drag_end) if drag_start else None, lines, manual,
+                      armed=armed, smooth=smooth, editing=editing)
             clock.tick(60)
 
 
 def main(argv=None):
-    run(arguments(argv))
+    args = arguments(argv)
+    control = None
+    if args.launcher_control:
+        from session_control import SessionControl
+        control = SessionControl()
+    run(args, control=control)
 
 
 if __name__ == "__main__":
