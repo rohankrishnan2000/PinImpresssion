@@ -1,183 +1,144 @@
-# Horizontal hand-following motor prototype
+# Pin Impression — boundary and keyboard draft
 
-Camera → Python hand tracker → USB → Elegoo Uno R3 → Panucatt SD8825 → stepper.
+This project lives in `TL/PinImpresssion/`. This version makes **hand position following the default** and
+moves continuous rotation into a camera-free keyboard mode.
 
-This is a separate working copy in `/Users/yangq/Desktop/TL/`. The repository
-inside `PinImpresssion/` is unchanged. Both camera-only and preview modes work
-without connecting a motor. Live mode requires uploading the included Arduino
-sketch and wiring the driver first.
+The working hardware configuration is preserved: **STEP D3, DIR D2, EN D4,
+MICROSTEPS = 1**. The Uno sketch and serial transport are copied unchanged from
+the working repository. An Uno already running that sketch needs no new upload.
+
+## Start here
+
+Use your existing Python environment with the project dependencies, or create a
+new environment with Python 3.13. The pinned dependencies were tested on 3.13.
+These commands assume that environment's interpreter is named `python`:
+
+```bash
+cd /Users/yangq/Desktop/TL/PinImpresssion
+python -m pip install -r requirements.txt
+python hand_tracker.py --motor-preview
+```
+
+`pygame-ce` is the new dependency. It supplies window-local key-down/key-up events
+and mouse drawing. This avoids needing global keyboard permissions. Preview
+never opens a motor port. The first camera run downloads the MediaPipe model
+if `models/hand_landmarker.task` is missing; manual mode needs neither the model
+nor the camera. Grant camera access to the application running Python if asked.
+
+1. Press **B** and drag a rectangle around the usable hand area. Release the
+   mouse to save it. B again cancels editing. Tiny rectangles are rejected.
+2. Check the hand label; the controlling hand defaults to **Right**. Use
+   `--control-hand left` if appropriate.
+3. Move the palm across the rectangle: left edge → left angle, middle → 0°,
+   right edge → right angle. A fixed palm location gives a fixed target.
+4. Leave **F** off initially. Toggle it on only if you want smoothing.
+5. Check the motor range in `motor_config.py` before connecting the mechanism.
+
+The rectangle is saved beside the script as `tracking_boundary.json`, using
+normalized image coordinates. It survives resolution changes. Redraw it after
+moving the camera or changing framing. A changed mirror setting rejects the
+saved calibration and displays the default rectangle with a notice.
+
+## Run with the motor
+
+Establish the mechanism's center before opening a live session. Opening USB
+usually resets the Uno; the sketch declares the shaft's current position zero.
+It does not locate the middle of the belt. The default ±90° range is a test
+setting, not a measurement of available travel.
+
+Find the port, close Arduino Serial Monitor, then start:
+
+```bash
+python -m serial.tools.list_ports
+python hand_tracker.py --motor-port YOUR_PORT
+```
+
+Replace `YOUR_PORT` with the listed port (`/dev/cu.usbmodem...` on macOS or
+`COM...` on Windows). Live operation starts paused. Put the selected palm near
+the rectangle's center and press **M** in the tracker window. M pauses again.
+
+A missing/ambiguous hand or a palm outside any edge of the rectangle issues
+HOLD: it cancels the previous target at the current commanded position. It does
+not drive back to center. When the hand returns, following resumes if armed,
+using the same absolute position map. Changing the boundary pauses the motor;
+press M after drawing to resume. Losing window focus also pauses and requires M.
+
+## Continuous rotation without a camera
+
+Exit the hand tracker before launching the keyboard mode on the same port:
+
+```bash
+python hand_tracker.py --mode manual --motor-port YOUR_PORT
+```
+
+Press M to arm, then **hold A** for left rotation or **hold D** for right.
+Release to stop. Holding both keys stops. Click back into the window and press
+M after focus loss; held keys are cleared and a fresh A/D press is required.
+To test the controls without hardware, replace `--motor-port YOUR_PORT` with
+`--motor-preview`.
+
+This is continuous shaft rotation with **no mechanical travel limits**. The
+hand-position angle range does not restrict keyboard rotation. Test an unloaded
+shaft, or supervise the belt travel directly until physical limits are added.
+Start at the 90°/s default; change `MANUAL_SPEED_DEGREES_S` or `--manual-speed` to
+adjust it. `--reverse-motor` reverses either mode.
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| M | Start/pause (also allows keyboard preview testing) |
+| B | Position mode: draw/save the camera boundary; B again cancels |
+| F | Position mode: smoothing on/off, starts off |
+| A / D | Manual mode: hold left/right; release to stop |
+| W / S | Reserved for a future vertical axis; no action |
+| P | Save a screenshot beside the script |
+| Q / Esc | Exit and stop/disarm the motor |
+
+Position and manual modes are selected at launch. A/D do not override the hand
+in position mode. `--mode spin`, `--degrees-per-pixel`, `--deadzone`, `--max-spin`,
+`--normalized`, and the old `--smoothing` option are not used by this draft.
+See [TUNING.md](TUNING.md) for the replacement settings.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `hand_tracker.py` | Camera, hand detection, display, and start/pause control |
-| `motor_config.py` | Adjustable defaults and recorded hardware ratings |
-| `motion_control.py` | Centered horizontal pixels → target shaft angle |
-| `motor_serial.py` | Angle → driver steps; acknowledged USB messages to the Uno |
-| `uno_hand_follow/uno_hand_follow.ino` | Uno program: STEP/DIR pulses, acceleration, and command timeout |
-| `requirements.txt` | Python dependencies |
-| `test_motion_control.py`, `test_motor_serial.py` | Hardware-free mapping and USB-protocol tests |
+| `hand_tracker.py` | Camera tracking, keyboard-only mode, window and keys |
+| `tracking_control.py` | Saved boundary, position mapping, held-key state |
+| `tracking_filter.py` | Optional time-based adaptive smoothing |
+| `motor_config.py` | Tunable defaults and hardware reference values |
+| `motor_serial.py` | Existing acknowledged USB commands and degree-to-step conversion |
+| `motion_control.py` | Existing command type and legacy mappers; main uses the new boundary mapper |
+| `uno_hand_follow/uno_hand_follow.ino` | Unchanged, working Uno firmware |
+| `TUNING.md` | What to change, units, effects, and calibration examples |
+| `test_*.py` | Mapping, input-event, filtering and USB tests without hardware |
 
-## Settings to change
+## Hardware and limitations
 
-Edit `motor_config.py`, then restart the tracker. These are the initial values:
+Keep the existing SD8825 wiring and physical full-step mode. The motor label
+says 1.8° and 1.0 A per phase; the supply is recorded as an unconfirmed 12 V,
+1.5 A supply. Editing those reference entries cannot alter voltage or current.
+Do not substitute the supply's current rating for the motor's phase-current
+setting. This draft does not change driver wiring/current adjustment.
 
-```python
-POWER_SUPPLY_VOLTAGE_V = 12.0
-POWER_SUPPLY_MAX_CURRENT_A = 1.5
-POWER_SUPPLY_CONFIRMED = False
+Position commands are rounded to full steps (1.8° per pulse). Smoothing cannot
+make the physical driver take smaller steps. Change microstepping only by
+matching the hardware setting and software value together.
 
-DEGREES_PER_PIXEL = 0.1
-SPEED_FACTOR = 1.0
-BASE_SPEED_DEGREES_S = 90.0
-ACCELERATION_DEGREES_S2 = 180.0
-MICROSTEPS = 8
-```
+The display shows requested position, not measured position. There is no homing,
+encoder or stall detection. HOLD stops pulses immediately, retaining holding
+torque after motion starts; inertia can cause lost physical position. Quit,
+serial failure, or a 750 ms command timeout disarms the driver and releases
+holding torque. After a timeout, restart and establish zero again.
 
-**The power-supply entries are unconfirmed reference values only.** They do not
-control voltage, current, or motor speed. Update them after checking the actual
-supply label; changing them never reconfigures the driver. Supply current
-capacity (estimated 1.5 A) is distinct from the motor's rated phase current (1.0 A).
-
-The two main software controls are independent:
-
-- `DEGREES_PER_PIXEL`: how far to turn. At 0.1, x = +100 pixels requests +10°.
-- `SPEED_FACTOR`: how fast to approach the target. At 1.0, the limit is 90°/s;
-  at 0.5 it is 45°/s. Acceleration ramps the motion toward this limit.
-
-`REVERSE_MOTOR` reverses direction. `CONTROL_HAND` selects `right` or `left`.
-`MICROSTEPS` must match the physical mode-pin wiring; editing the number does
-not change the driver hardware. The 1.8° motor has 200 full steps/revolution.
-At 1/8 microstepping, 1600 pulses request one revolution, or 0.225° per pulse.
-Targets are rounded to the nearest pulse.
-
-The Uno rejects speeds above 2000 pulses/s and acceleration above 5000 pulses/s².
-These are firmware limits, not measured capabilities of your mechanical setup.
-
-## Wiring and current limit
-
-Follow the SD8825's printed labels. Its motor-output order differs from some
-other DRV8825 carriers. The Panucatt Rev 1 guide specifies 3–5.5 V logic power,
-an 8–35 V motor supply, and `current limit = 2 × VREF` for its 0.10 Ω sense
-resistors. For the photographed 1.0 A motor, that corresponds to **VREF = 0.50 V**;
-confirm the board matches that guide before setting it with a multimeter.
-Do not use the supply's 1.5 A rating as the motor's current-limit setting.
-[Panucatt user guide, mirrored manufacturer document](https://manualzilla.com/doc/5669131/sd8825-users-guide).
-
-| SD8825 label | Connection for this sketch |
-| --- | --- |
-| STEP | Uno D3 |
-| DIR | Uno D2 |
-| EN | Uno D4; also use a 10 kΩ pull-up to Uno 5 V to keep it disabled during reset |
-| RST, SLP | Uno 5 V |
-| VDD | Uno 5 V (logic supply) |
-| GND | Common ground with Uno GND and motor-supply negative |
-| VMOT | Confirmed motor-supply positive; never an Uno I/O or 5 V pin |
-| 1A | Motor black (A+) |
-| 1B | Motor green (A−) |
-| 2A | Motor red (B+) |
-| 2B | Motor blue (B−) |
-| M0, M1 | Uno 5 V for the default 1/8 microstepping |
-| M2 | GND for the default 1/8 microstepping |
-
-The mode signals correspond to TI's DRV8825 mode table. The sketch uses 3 µs
-STEP pulses and active-low enable. [TI DRV8825 datasheet](https://www.ti.com/lit/ds/symlink/drv8825.pdf).
-
-Keep the existing onboard VREF jumper in place; leave the extra DEC and FLT
-pads unconnected for this prototype. Use the driver heatsink as described in
-its guide. Connect or disconnect motor wires with power off. Provide local
-VMOT bulk decoupling according to the driver setup; do not rely on long supply
-leads alone. Check supply polarity and its actual rating before powering up.
-
-## Python setup and preview
-
-Run from **TL**, not the repository subfolder:
+## Verification
 
 ```bash
-cd /Users/yangq/Desktop/TL
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python hand_tracker.py --motor-preview
+python -m unittest discover -v
 ```
 
-Use a Python version supported by the pinned MediaPipe package. The hand model
-downloads into `models/` on first use. On macOS, grant the app running Python
-camera access in System Settings → Privacy & Security → Camera.
-
-Omit `--motor-preview` for the original camera-only behavior. The tracker
-averages the wrist and four finger-base landmarks, smooths that palm position,
-and expresses it around image center with +x to the right and +y upward.
-The motor uses only smoothed x in **pixels**. The `n` key changes displayed
-units without changing motor commands. Requested resolution affects how many
-pixels correspond to a given hand displacement; calibration is still pending.
-
-## Upload the Uno program
-
-1. In Arduino IDE, install **AccelStepper by Mike McCauley** from Library Manager.
-   The sketch was compiled against version 1.64.
-2. Open `uno_hand_follow/uno_hand_follow.ino`.
-3. Select **Arduino Uno** and the connected Uno's port, then upload.
-4. Close Serial Monitor before starting Python so the port is available.
-
-The pin constants and 750 ms command timeout are at the top of the sketch.
-The power supply is not programmed into this sketch.
-
-## Live operation
-
-First test the motor shaft with the belt/load disconnected. This prototype has
-no end switches, homing, or mechanical travel boundaries. Each new USB session
-declares the stationary shaft's current position to be zero; it does not find
-the middle of the belt. Before testing an attached mechanism, establish its
-center and permitted travel separately.
-
-Find the Uno's port:
-
-```bash
-.venv/bin/python -m serial.tools.list_ports
-```
-
-Use that port in place of `/dev/cu.usbmodemXXXX`:
-
-```bash
-.venv/bin/python hand_tracker.py --motor-port /dev/cu.usbmodemXXXX --speed-factor 0.5
-```
-
-- Live mode starts **paused**. Put the selected hand near screen center and
-  press **m** in the camera window to start following. Press **m** again to pause.
-- **q / Esc** exits; **n** toggles displayed units; **s** saves a screenshot.
-- A stationary hand produces a stationary target, not continuous rotation.
-- Losing the selected hand requests a hold at the current commanded position.
-  A second hand cannot take over unless it has the selected label; duplicate
-  labels also request a hold. Reappearance resumes following when armed.
-- Hand loss and pause cancel pulses immediately and retain holding torque after
-  movement has begun. A sudden stop can lose physical position under inertia.
-- Quit, malformed commands, and a command gap over **750 ms** disarm the driver
-  and release torque. After a timeout or USB reset, Python exits on the error;
-  restart and establish zero again. The motor does not automatically reconnect.
-
-This is **open-loop control**: the display is a requested angle, and the Uno
-counts issued steps. Neither measures actual shaft/belt position or detects a
-stall. Motor feedback and physical travel limits remain future work.
-
-Additional options include `--degrees-per-pixel`, `--speed-factor`,
-`--acceleration`, `--microsteps`, `--control-hand`, `--reverse-motor`, and the
-original camera/resolution/smoothing options. Preview and live mode are mutually
-exclusive; use `--help` for the full list.
-
-## Protocol and verification
-
-At 115200 baud, Python sends one acknowledged line at a time, up to 20 times/s:
-`HELLO`, `CONFIG <steps/s> <steps/s²>`, `TARGET <absolute steps>`, `HOLD`, `STOP`.
-Each move uses the latest target; stale commands are not queued by Python.
-The Uno runs AccelStepper continuously between incoming characters.
-[AccelStepper documentation](https://www.airspayce.com/mikem/arduino/AccelStepper/classAccelStepper.html).
-
-Run the Python tests without a camera or connected motor:
-
-```bash
-python3 -m unittest -v test_motion_control test_motor_serial
-```
-
-The software checks and Uno compilation do not establish physical accuracy,
-available torque, acceptable temperature, or an appropriate speed for the belt.
+46 tests passed, including actual window-event handling with a virtual display,
+key release, focus loss, rectangle saving, smoothing toggle, and camera-error
+cleanup. The display was inspected using a synthetic frame. This does not
+replace a real-camera and motor test on the board.

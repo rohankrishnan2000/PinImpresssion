@@ -2,8 +2,12 @@
 __pycache__/
 *.pyc
 
-# Downloaded automatically on first run by ensure_model()
+# Downloaded automatically on first run by the camera tracker
 models/*.task
 
-# Screenshots saved with the 's' key
+# Screenshots saved with the 'p' key
 hand_*.png
+
+# Local camera calibration (redraw if the camera moves)
+tracking_boundary.json
+tracking_boundary.json.tmp

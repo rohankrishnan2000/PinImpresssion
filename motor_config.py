@@ -15,15 +15,15 @@ MOTOR_STEP_ANGLE_DEGREES = 1.8
 MICROSTEPS = 1
 
 CONTROL_HAND = "right"
+# Legacy pixel mapper only; not used by the boundary-based main script.
 DEGREES_PER_PIXEL = 0.1
 SPEED_FACTOR = 1.0
 BASE_SPEED_DEGREES_S = 90.0
 ACCELERATION_DEGREES_S2 = 180.0
 REVERSE_MOTOR = False
 
-# Spin mode (default): hand distance from center sets continuous rotation speed.
-# 0 at the center, MAX_SPIN_DEGREES_S once the hand is SPIN_FULL_SPEED_FRACTION
-# of the way to the left/right frame edge. Left of center spins the other way.
+# Legacy camera-spin mapper settings retained for older experiments/tests.
+# The main script no longer uses these four settings; see MANUAL_* below.
 MAX_SPIN_DEGREES_S = 720.0          # 2 rev/s; 400 pulses/s at full step
 SPIN_ACCELERATION_DEGREES_S2 = 1080.0
 SPIN_DEADZONE_PX = 40
@@ -31,3 +31,18 @@ SPIN_FULL_SPEED_FRACTION = 0.8
 
 SERIAL_BAUD = 115200
 COMMAND_RATE_HZ = 20.0
+
+# Boundary position mode (the default). Angles relative to the shaft at connect.
+# Example test range only: measure belt travel before using with the mechanism.
+POSITION_MIN_DEGREES = -90.0
+POSITION_MAX_DEGREES = 90.0
+
+# Camera-free manual mode: hold A/D to rotate, release to hold.
+MANUAL_SPEED_DEGREES_S = 90.0
+MANUAL_ACCELERATION_DEGREES_S2 = 180.0
+
+# Optional F-toggle smoothing; off initially.
+SMOOTHING_ENABLED = False
+FILTER_MIN_CUTOFF_HZ = 1.0
+FILTER_BETA = 5.0
+FILTER_DERIVATIVE_CUTOFF_HZ = 1.0
