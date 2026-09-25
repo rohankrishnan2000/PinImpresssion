@@ -9,7 +9,18 @@ the working repository. An Uno already running that sketch needs no new upload.
 
 ## Start with the setup window
 
-From your existing Python environment:
+On macOS, double-click **Start Pin Impression.command** in this folder. It opens
+the setup interface using the project's `.venv` when present, then the Anaconda
+Python used on the original Mac, and finally another available Python. Keep the
+command file beside `launcher.py`; it finds the project from its own location,
+so the entire folder can be moved without editing the launcher.
+
+The first launch may ask whether you want to open a downloaded command file.
+Choose Open. A Terminal window remains behind the interface and closes when the
+interface exits. If startup fails, it stays open and shows the Python interpreter
+and dependency-install command to use.
+
+You can still start it from your existing Python environment:
 
 ```bash
 cd /Users/yangq/Desktop/TL/PinImpresssion

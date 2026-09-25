@@ -16,9 +16,9 @@ MICROSTEPS = 1
 
 CONTROL_HAND = "right"
 # Legacy pixel mapper only; not used by the boundary-based main script.
-DEGREES_PER_PIXEL = 0.1
-SPEED_FACTOR = 1.0
-BASE_SPEED_DEGREES_S = 90.0
+DEGREES_PER_PIXEL = 1
+SPEED_FACTOR = 10.0
+BASE_SPEED_DEGREES_S = 360.0
 ACCELERATION_DEGREES_S2 = 180.0
 REVERSE_MOTOR = False
 
@@ -34,8 +34,8 @@ COMMAND_RATE_HZ = 20.0
 
 # Boundary position mode (the default). Angles relative to the shaft at connect.
 # Example test range only: measure belt travel before using with the mechanism.
-POSITION_MIN_DEGREES = -90.0
-POSITION_MAX_DEGREES = 90.0
+POSITION_MIN_DEGREES = -1080.0
+POSITION_MAX_DEGREES = 1080.0
 
 # Camera-free manual mode: hold A/D to rotate, release to hold.
 MANUAL_SPEED_DEGREES_S = 90.0
